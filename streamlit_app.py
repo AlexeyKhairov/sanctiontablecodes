@@ -2,67 +2,56 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-def process_file(uploaded_file):
-    try:
-        # Чтение файла
-        df = pd.read_excel(uploaded_file, engine='openpyxl')
-        
-        # Проверка наличия необходимых колонок
-        required_columns = ['TarrifCodeClear', 'PercentNumberClear', 'TarrifCodeTWS', 'PercentNumberTWS']
-        if not all(col in df.columns for col in required_columns):
-            st.error("Файл не содержит необходимых колонок!")
-            return None
-
-        # Основной цикл обработки
-        for idx, row in df.iterrows():
-            current_code = row['TarrifCodeClear']
-            
-            # Поиск совпадений в TarrifCodeTWS
-            matches = df[df['TarrifCodeTWS'] == current_code]
-            
-            if not matches.empty:
-                # Получаем все значения PercentNumberTWS для совпадений
-                e_values = matches['PercentNumberTWS'].tolist()
-                
-                if len(e_values) == 1:
-                    # Одно совпадение - проверяем значения
-                    if row['PercentNumberClear'] != e_values[0]:
-                        df.at[idx, 'PercentNumberClear'] = e_values[0]
-                else:
-                    # Несколько совпадений - считаем среднее
-                    average = sum(e_values) / len(e_values)
-                    df.at[idx, 'PercentNumberClear'] = average
-
-        return df
-
-    except Exception as e:
-        st.error(f"Ошибка обработки файла: {str(e)}")
-        return None
+def process_codes(df):
+    # Получаем имя первого столбца
+    col_name = df.columns[0]
+    
+    # Применяем преобразования
+    df[col_name] = (
+        df[col_name]
+        .astype(str)
+        .str.replace(r'\s+', '', regex=True)          # Удаление пробелов
+        .str.replace(r'(?i)из', '', regex=True)       # Удаление "Из" и "из" (регистронезависимо)
+        .str[:6]                                      # Обрезка после 6 символов
+    )
+    return df
 
 # Интерфейс
-st.title("Обработка тарифных кодов")
-uploaded_file = st.file_uploader("Загрузите XLSX файл", type="xlsx")
+st.title("Обработка кодов")
+uploaded_file = st.file_uploader("Программа проводит последовательно вот такие операции с этими кодами: 1)	Убрать пробелы везде в ячейках; 2)	Убрать «Из» и «из» из ячеек; 3)	Убрать все символы стоящие после 6 знаков. Для продолжения загрузите XLSX файл с одним столбцом, содержащим коды", type="xlsx")
 
 if uploaded_file:
-    if st.button("Запуск сравнения"):
-        with st.spinner("Идет обработка файла..."):
-            processed_df = process_file(uploaded_file)
+    try:
+        # Чтение файла
+        df = pd.read_excel(uploaded_file)
+        
+        # Проверка количества столбцов
+        if len(df.columns) != 1:
+            st.error("Файл должен содержать только один столбец!")
+            st.stop()
             
-        if processed_df is not None:
-            st.success("Обработка завершена!")
+        # Обработка данных
+        processed_df = process_codes(df)
+        
+        # Создание файла для скачивания
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            processed_df.to_excel(writer, index=False)
             
-            # Создаем файл для скачивания
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                processed_df.to_excel(writer, index=False)
-            
-            st.download_button(
-                label="Скачать обработанный файл",
-                data=output.getvalue(),
-                file_name="processed_file.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            # Показать предпросмотр данных
-            st.subheader("Предпросмотр данных")
-            st.dataframe(processed_df.head())
+        # Показ результатов
+        st.success("Обработка завершена!")
+        
+        # Кнопка скачивания
+        st.download_button(
+            label="Скачать обработанный файл",
+            data=output.getvalue(),
+            file_name="processed_codes.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+        # Превью данных
+        st.subheader("Предпросмотр обработанных данных")
+        st.dataframe(processed_df.head(20))
+        
+    except Exception as e:
+        st.error(f"Ошибка обработки файла: {str(e)}")
